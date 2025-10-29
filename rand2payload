@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import argparse
 import json
 import sys
@@ -7,7 +9,10 @@ from xs128p import predict_sequence
 
 def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(
-        description='Predict the next Math.random() outputs for Chrome, Firefox, or Safari.',
+        description=(
+            'Predict the next Math.random() outputs for Chrome, Firefox, or Safari. '
+            'Only the Chrome path is tested.'
+        ),
     )
     parser.add_argument(
         '--browser',
@@ -48,6 +53,9 @@ def main(argv=None):
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+    if args.browser != 'chrome':
+        print('Warning: only the Chrome path is regression tested.', file=sys.stderr)
 
     if args.json:
         json.dump(predictions, sys.stdout, indent=2)

@@ -25,12 +25,13 @@ Run the test with:
 
 ## CLI usage
 
-`main.py` exposes a small CLI wrapper around `predict_sequence`.
+`./rand2payload` exposes a small CLI wrapper around `predict_sequence`. Only the Chrome path is covered by automated tests; Firefox and Safari modes are experimental and not tested yet.
 
 Example:
 
 ```
-.venv/bin/python main.py --count 15 0.9695987786633904 0.28071711843620584 0.17303127964472753 0.9884694323895107 0.5292326613492848
+./rand2payload --count 15 0.9695987786633904 0.28071711843620584 0.17303127964472753 0.9884694323895107 0.5292326613492848
 ```
 
 Use `--json` to print the predictions as a JSON array instead of one value per line.
+Run the command from an environment where `z3-solver` is installed (activate the virtualenv created above).
