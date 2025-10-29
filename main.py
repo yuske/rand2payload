@@ -1,24 +1,63 @@
+import argparse
+import json
+import sys
+
 from xs128p import predict_sequence
 
 
-def main():
-    browser = 'chrome'
-    observed = [
-        0.9695987786633904,
-        0.28071711843620584,
-        0.17303127964472753,
-        0.9884694323895107,
-        0.5292326613492848,
-    ]
+def parse_arguments(argv=None):
+    parser = argparse.ArgumentParser(
+        description='Predict the next Math.random() outputs for Chrome, Firefox, or Safari.',
+    )
+    parser.add_argument(
+        '--browser',
+        choices=('chrome', 'firefox', 'safari'),
+        default='chrome',
+        help='Browser implementation to emulate (default: chrome).',
+    )
+    parser.add_argument(
+        '--count',
+        type=int,
+        required=True,
+        help='Number of future values to predict.',
+    )
+    parser.add_argument(
+        '--json',
+        action='store_true',
+        help='Output predictions as JSON array.',
+    )
+    parser.add_argument(
+        'observed',
+        nargs='+',
+        help='Observed Math.random() outputs (space separated).',
+    )
+    return parser.parse_args(argv)
 
-    predictions = predict_sequence(observed, 16, browser=browser)
 
-    print('BROWSER: %s' % browser)
-    print('Observed sequence:', observed)
-    print('Predicted sequence:')
-    for value in predictions:
-        print(value)
+def main(argv=None):
+    args = parse_arguments(argv)
+
+    try:
+        observed = [float(value) for value in args.observed]
+    except ValueError as exc:
+        print(f'Invalid observed value: {exc}', file=sys.stderr)
+        return 1
+
+    try:
+        predictions = predict_sequence(observed, args.count, browser=args.browser)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.json:
+        json.dump(predictions, sys.stdout, indent=2)
+        sys.stdout.write('\n')
+    else:
+        for value in predictions:
+            print(value)
+
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
