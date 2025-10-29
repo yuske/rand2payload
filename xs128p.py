@@ -83,40 +83,29 @@ def to_double(browser, out):
     return double
 
 
-def main():
-    # Note: 
-        # Safari tests have always turned up UNSAT
-        # Wait for an update from Apple?
-    # browser = 'safari'
-    browser = 'chrome'
-    # browser = 'firefox'
-    print('BROWSER: %s' % browser)
+def predict_sequence(observed_doubles, count, browser='chrome'):
+    if browser not in ('chrome', 'firefox', 'safari'):
+        raise ValueError('Unsupported browser: %s' % browser)
 
-    # In your browser's JavaScript console:
-    # _ = []; for(var i=0; i<5; ++i) { _.push(Math.random()) } ; console.log(_)
-    # Enter at least the 3 first random numbers you observed here:
-    # Observations show Chrome needs ~5
-    dubs = [
-        0.9695987786633904,
-        0.28071711843620584,
-        0.17303127964472753,
-        0.9884694323895107,
-        0.5292326613492848
-    ]
+    if count <= 0:
+        return []
+
+    if not observed_doubles:
+        raise ValueError('observed_doubles must contain at least one value')
+
+    doubles = list(observed_doubles)
     if browser == 'chrome':
-        dubs = dubs[::-1]
+        doubles = list(reversed(doubles))
 
-    print(dubs)
-
-    # from the doubles, generate known piece of the original uint64 
+    # from the doubles, generate known piece of the original uint64
     generated = []
-    for idx in range(len(dubs)):
+    for value in doubles:
         if browser == 'chrome':
-            recovered = struct.unpack('<Q', struct.pack('d', dubs[idx] + 1))[0] & (MASK >> 12)
+            recovered = struct.unpack('<Q', struct.pack('d', value + 1))[0] & (MASK >> 12)
         elif browser == 'firefox':
-            recovered = dubs[idx] * (0x1 << 53) 
-        elif browser == 'safari':
-            recovered = dubs[idx] / (1.0 / (1 << 53))
+            recovered = int(value * (0x1 << 53))
+        else:  # safari
+            recovered = int(value / (1.0 / (1 << 53)))
         generated.append(recovered)
 
     # setup symbolic state for xorshift128+
@@ -126,40 +115,35 @@ def main():
     slvr = Solver()
     conditions = []
 
-    # run symbolic xorshift128+ algorithm for three iterations
-    # using the recovered numbers as constraints
-    for ea in range(len(dubs)):
-        sym_state0, sym_state1, ret_conditions = sym_xs128p(slvr, sym_state0, sym_state1, generated[ea], browser)
-        conditions += ret_conditions
+    # run symbolic xorshift128+ algorithm for the provided observations
+    for known in generated:
+        sym_state0, sym_state1, ret_conditions = sym_xs128p(slvr, sym_state0, sym_state1, known, browser)
+        conditions.extend(ret_conditions)
 
+    if slvr.check(conditions) != sat:
+        raise ValueError('Unable to recover internal state from observations')
+
+    model = slvr.model()
+    state0 = model[ostate0].as_long()
+    state1 = model[ostate1].as_long()
+
+    # check that the solver produced a unique solution for the provided data
+    slvr.add(Or(ostate0 != model[ostate0], ostate1 != model[ostate1]))
     if slvr.check(conditions) == sat:
-        # get a solved state
-        m = slvr.model()
-        state0 = m[ostate0].as_long()
-        state1 = m[ostate1].as_long()
-        slvr.add(Or(ostate0 != m[ostate0], ostate1 != m[ostate1]))
-        if slvr.check(conditions) == sat:
-            print('WARNING: multiple solutions found! use more dubs!')
-        print('state', state0, state1)
+        raise ValueError('Multiple solutions found; provide more observations')
 
-        generated = []
-        double = to_double(browser, state0)
-        print('gen', double)
-        generated.append(double)
+    predictions = []
+    current_state0 = state0
+    current_state1 = state1
 
-        # generate random numbers from recovered state
-        for idx in range(15):
-            if browser == 'chrome':
-                state0, state1, out = xs128p_backward(state0, state1, browser)
-                out = state0 & MASK
-            else:
-                state0, state1, out = xs128p(state0, state1, browser)
+    predictions.append(to_double(browser, current_state0))
 
-            double = to_double(browser, out)
-            print('gen', double)
-            generated.append(double)
+    for _ in range(count - 1):
+        if browser == 'chrome':
+            current_state0, current_state1, out = xs128p_backward(current_state0, current_state1, browser)
+            out = current_state0 & MASK
+        else:
+            current_state0, current_state1, out = xs128p(current_state0, current_state1, browser)
+        predictions.append(to_double(browser, out))
 
-    else:
-        print('UNSAT')
-
-main()
+    return predictions
