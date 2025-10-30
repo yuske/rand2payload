@@ -10,7 +10,8 @@
 
 ```
 python3 -m venv .venv
-.venv/bin/pip install z3-solver
+source .venv/bin/activate
+pip install z3-solver
 ```
 
 ## Tests
@@ -20,7 +21,7 @@ The Chrome/Node regression test spawns Node.js to capture a `Math.random()` sequ
 Run the test with:
 
 ```
-.venv/bin/python -m unittest tests/test_chrome_node.py
+python3 -m unittest tests/test_chrome_node.py
 ```
 
 ## CLI usage
@@ -47,3 +48,31 @@ Example:
 ```
 
 Visit `http://localhost:8080/` to load the sample `public/index.html` page. The `--verbose` flag prints incoming headers and body payloads in addition to the method and URL.
+
+### Predict endpoint
+
+When the server is running, it also exposes a POST `/predict` endpoint that wraps `predict_sequence`.
+
+Body fields:
+
+- `kind`: `"double"` for raw `Math.random()` observations, or `"round"` when you only have the rounded integers (e.g. `Math.round(Math.random() * 10000)`).
+- `observations`: non-empty array of your observed values (ints for `round`, floats for `double`).
+- `count`: how many future random values you want.
+- `scale` (optional): only for `kind: "round"`. If omitted, the server infers a decimal scale from the maximum observation.
+
+Example request:
+
+```js
+fetch('http://localhost:8000/predict', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    kind: 'round',
+    observations: [9415, 1920, 3442, 3584, 3390, 7138, 6626, 6473, 3740, 1409],
+    count: 10,
+    scale: 10000
+  }),
+})
+  .then((res) => res.json())
+  .then(({ predictions }) => console.log(predictions));
+```
