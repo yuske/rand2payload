@@ -35,3 +35,15 @@ Example:
 
 Use `--json` to print the predictions as a JSON array instead of one value per line.
 Run the command from an environment where `z3-solver` is installed (activate the virtualenv created above).
+
+## Static web server
+
+`./web_server.py` serves files from the `public/` directory (default) with permissive CORS headers and optional verbose logging of request headers and bodies.
+
+Example:
+
+```
+./web_server.py --host 0.0.0.0 --port 8080 --verbose
+```
+
+Visit `http://localhost:8080/` to load the sample `public/index.html` page. The `--verbose` flag prints incoming headers and body payloads in addition to the method and URL.
