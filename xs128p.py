@@ -1,51 +1,26 @@
 import struct
-import random
+import math
 from z3 import *
 
 MASK = 0xFFFFFFFFFFFFFFFF
 
-# xor_shift_128_plus algorithm
+# xor_shift_128_plus algorithm (concrete)
 def xs128p(state0, state1, browser):
     s1 = state0 & MASK
     s0 = state1 & MASK
     s1 ^= (s1 << 23) & MASK
     s1 ^= (s1 >> 17) & MASK
     s1 ^= s0 & MASK
-    s1 ^= (s0 >> 26) & MASK 
+    s1 ^= (s0 >> 26) & MASK
     state0 = state1 & MASK
     state1 = s1 & MASK
     if browser == 'chrome':
         generated = state0 & MASK
     else:
         generated = (state0 + state1) & MASK
-
     return state0, state1, generated
 
-# Symbolic execution of xs128p
-def sym_xs128p(slvr, sym_state0, sym_state1, generated, browser):
-    s1 = sym_state0 
-    s0 = sym_state1 
-    s1 ^= (s1 << 23)
-    s1 ^= LShR(s1, 17)
-    s1 ^= s0
-    s1 ^= LShR(s0, 26) 
-    sym_state0 = sym_state1
-    sym_state1 = s1
-    if browser == 'chrome':
-        calc = sym_state0
-    else:
-        calc = (sym_state0 + sym_state1)
-    
-    condition = Bool('c%d' % int(generated * random.random()))
-    if browser == 'chrome':
-        impl = Implies(condition, LShR(calc, 12) == int(generated))
-    elif browser == 'firefox' or browser == 'safari':
-        # Firefox and Safari save an extra bit
-        impl = Implies(condition, (calc & 0x1FFFFFFFFFFFFF) == int(generated))
-
-    slvr.add(impl)
-    return sym_state0, sym_state1, [condition]
-
+# Reverse one step (only needed for Chrome path below)
 def reverse17(val):
     return val ^ (val >> 17) ^ (val >> 34) ^ (val >> 51)
 
@@ -55,87 +30,173 @@ def reverse23(val):
 def xs128p_backward(state0, state1, browser):
     prev_state1 = state0
     prev_state0 = state1 ^ (state0 >> 26)
-    prev_state0 = prev_state0 ^ state0
+    prev_state0 ^= state0
     prev_state0 = reverse17(prev_state0)
     prev_state0 = reverse23(prev_state0)
-    # this is only called from an if chrome
-    # but let's be safe in case someone copies it out
     if browser == 'chrome':
         generated = prev_state0
     else:
         generated = (prev_state0 + prev_state1) & MASK
     return prev_state0, prev_state1, generated
 
-# Firefox nextDouble():
-    # (rand_uint64 & ((1 << 53) - 1)) / (1 << 53)
-# Chrome nextDouble():
-    # (state0 | 0x3FF0000000000000) - 1.0
-# Safari weakRandom.get():
-    # (rand_uint64 & ((1 << 53) - 1) * (1.0 / (1 << 53)))
+# Concrete -> double
 def to_double(browser, out):
     if browser == 'chrome':
         double_bits = (out >> 12) | 0x3FF0000000000000
-        double = struct.unpack('d', struct.pack('<Q', double_bits))[0] - 1
+        double = struct.unpack('d', struct.pack('<Q', double_bits))[0] - 1.0
     elif browser == 'firefox':
-        double = float(out & 0x1FFFFFFFFFFFFF) / (0x1 << 53) 
+        double = float(out & 0x1FFFFFFFFFFFFF) / (1 << 53)
     elif browser == 'safari':
-        double = float(out & 0x1FFFFFFFFFFFFF) * (1.0 / (0x1 << 53))
+        double = float(out & 0x1FFFFFFFFFFFFF) * (1.0 / (1 << 53))
+    else:
+        raise ValueError('Unsupported browser: %s' % browser)
     return double
 
+# ---------------------------
+# NEW: pluggable observation models
+# ---------------------------
 
-def predict_sequence(observed_doubles, count, browser='chrome'):
-    if browser not in ('chrome', 'firefox', 'safari'):
+def constraint_exact_double(calc, obs, browser):
+    """
+    obs: a double in [0,1), e.g. Math.random() output.
+    Returns a BoolRef constraining the mantissa bits that produced obs.
+    """
+    if browser == 'chrome':
+        # Extract 52 mantissa bits from the observed double (x+1 trick)
+        known = struct.unpack('<Q', struct.pack('d', obs + 1.0))[0] & ((1 << 52) - 1)
+        M = LShR(calc, 12)  # top 52 bits
+        return M == BitVecVal(known, 64)
+    elif browser in ('firefox', 'safari'):
+        # Both effectively use 53 mantissa bits in [0, 2^53)
+        known = int(obs * (1 << 53))
+        mask = (1 << 53) - 1
+        M = calc & BitVecVal(mask, 64)
+        return M == BitVecVal(known, 64)
+    else:
         raise ValueError('Unsupported browser: %s' % browser)
 
+def constraint_rounded(R):
+    """
+    Factory returning a constraint_fn suitable for y = Math.round(Math.random() * R).
+    obs: an integer y in [0, R].
+    Constrains M (mantissa bits) to lie in the interval implied by rounding.
+    """
+    def _fn(calc, y, browser):
+        if not (isinstance(y, int) and 0 <= y <= R):
+            raise ValueError(f'Observation {y!r} must be int in [0, {R}]')
+        k = 52 if browser == 'chrome' else 53
+        scale = 1 << k
+        # Interval for u given y = round(u*R)
+        lo = max(0, math.ceil((y - 0.5) * scale / R))
+        hi = min(scale - 1, math.floor((y + 0.5) * scale / R) - 1)
+        if hi < lo:
+            # Impossible observation under this model
+            return False  # Z3 treats False as unsat constraint
+        if browser == 'chrome':
+            M = LShR(calc, 12)
+        elif browser in ('firefox', 'safari'):
+            M = calc & BitVecVal((1 << k) - 1, 64)
+        else:
+            raise ValueError('Unsupported browser: %s' % browser)
+        # Unsigned range constraint: lo <= M <= hi
+        return And(ULE(BitVecVal(lo, 64), M), ULE(M, BitVecVal(hi, 64)))
+    return _fn
+
+# ---------------------------
+# Symbolic step (now using your constraint_fn)
+# ---------------------------
+def sym_xs128p(slvr, sym_state0, sym_state1, obs, browser, constraint_fn, use_assumptions=True):
+    """
+    Symbolically advances the state one step and adds the constraint that ties this step's
+    output 'calc' to the provided observation 'obs' using 'constraint_fn'.
+    Returns: (new_state0, new_state1, [assumption_bool_if_used])
+    """
+    s1 = sym_state0
+    s0 = sym_state1
+    s1 ^= (s1 << 23)
+    s1 ^= LShR(s1, 17)
+    s1 ^= s0
+    s1 ^= LShR(s0, 26)
+    sym_state0 = sym_state1
+    sym_state1 = s1
+
+    # What the browser exposes to double construction
+    calc = sym_state0 if browser == 'chrome' else (sym_state0 + sym_state1)
+
+    # Your model supplies the constraint given calc and the raw observation
+    c = constraint_fn(calc, obs, browser)
+
+    if use_assumptions:
+        a = FreshBool('obs')
+        slvr.add(Implies(a, c))
+        return sym_state0, sym_state1, [a]
+    else:
+        slvr.add(c)
+        return sym_state0, sym_state1, []
+
+# ---------------------------
+# Predict sequence with pluggable constraints
+# ---------------------------
+def predict_sequence(observations, count, browser='chrome', constraint_fn=constraint_exact_double, use_assumptions=True):
+    """
+    observations: iterable of raw observations (e.g. doubles from Math.random(), or ints from round(...)).
+    count: how many future values to predict.
+    browser: 'chrome' | 'firefox' | 'safari'
+    constraint_fn(calc, obs, browser) -> BoolRef
+      - calc: BitVecExpr (64-bit) for this step's RNG word entering double-making
+      - obs:  the raw observation from 'observations'
+      - browser: same browser string (if your model needs it)
+    """
+    if browser not in ('chrome', 'firefox', 'safari'):
+        raise ValueError('Unsupported browser: %s' % browser)
     if count <= 0:
         return []
+    observations = list(observations)
+    if not observations:
+        raise ValueError('observations must contain at least one value')
 
-    if not observed_doubles:
-        raise ValueError('observed_doubles must contain at least one value')
+    # Chrome sequence direction quirk (matches original code)
+    obs_seq = list(reversed(observations)) if browser == 'chrome' else observations
 
-    doubles = list(observed_doubles)
-    if browser == 'chrome':
-        doubles = list(reversed(doubles))
-
-    # from the doubles, generate known piece of the original uint64
-    generated = []
-    for value in doubles:
-        if browser == 'chrome':
-            recovered = struct.unpack('<Q', struct.pack('d', value + 1))[0] & (MASK >> 12)
-        elif browser == 'firefox':
-            recovered = int(value * (0x1 << 53))
-        else:  # safari
-            recovered = int(value / (1.0 / (1 << 53)))
-        generated.append(recovered)
-
-    # setup symbolic state for xorshift128+
+    # Symbolic unknown initial state
     ostate0, ostate1 = BitVecs('ostate0 ostate1', 64)
     sym_state0 = ostate0
     sym_state1 = ostate1
     slvr = Solver()
-    conditions = []
+    assumptions = []
 
-    # run symbolic xorshift128+ algorithm for the provided observations
-    for known in generated:
-        sym_state0, sym_state1, ret_conditions = sym_xs128p(slvr, sym_state0, sym_state1, known, browser)
-        conditions.extend(ret_conditions)
+    # Feed all observations through the symbolic step with your constraint
+    for obs in obs_seq:
+        sym_state0, sym_state1, ret = sym_xs128p(slvr, sym_state0, sym_state1, obs, browser, constraint_fn, use_assumptions)
+        assumptions.extend(ret)
 
-    if slvr.check(conditions) != sat:
-        raise ValueError('Unable to recover internal state from observations')
+    # Solve
+    if use_assumptions:
+        if slvr.check(*assumptions) != sat:
+            raise ValueError('Unable to recover internal state from observations')
+    else:
+        if slvr.check() != sat:
+            raise ValueError('Unable to recover internal state from observations')
 
     model = slvr.model()
     state0 = model[ostate0].as_long()
     state1 = model[ostate1].as_long()
 
-    # check that the solver produced a unique solution for the provided data
+    # Check uniqueness
     slvr.add(Or(ostate0 != model[ostate0], ostate1 != model[ostate1]))
-    if slvr.check(conditions) == sat:
-        raise ValueError('Multiple solutions found; provide more observations')
+    if use_assumptions:
+        if slvr.check(*assumptions) == sat:
+            raise ValueError('Multiple solutions found; provide more observations')
+    else:
+        if slvr.check() == sat:
+            raise ValueError('Multiple solutions found; provide more observations')
 
+    # Predict 'count' future doubles
     predictions = []
     current_state0 = state0
     current_state1 = state1
 
+    # First output from recovered state:
     predictions.append(to_double(browser, current_state0))
 
     for _ in range(count - 1):
