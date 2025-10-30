@@ -2,16 +2,27 @@ import json
 import subprocess
 import unittest
 
+from extensions import constraint_rounded
 from xs128p import predict_sequence
 
 
 class ChromeNodePredictionTest(unittest.TestCase):
-    def _generate_node_randoms(self, count):
+    def _generate_node_randoms(
+        self,
+        count,
+        expression='value'
+    ):
         script = f"""
 const count = {count};
 const values = [];
-for (let i = 0; i < count; i++) values.push(Math.random());
-console.log(JSON.stringify(values));
+const modified = [];
+const compute = (value) => {expression};
+for (let i = 0; i < count; i++) {{
+  const value = Math.random();
+  values.push(value);
+  modified.push(compute(value));
+}}
+console.log(JSON.stringify({{values, modified}}));
 """
         result = subprocess.run(
             ['node', '-e', script],
@@ -19,17 +30,45 @@ console.log(JSON.stringify(values));
             capture_output=True,
             text=True,
         )
-        return json.loads(result.stdout)
+        data = json.loads(result.stdout)
+        return data['values'], data['modified']
 
     def test_predict_sequence_matches_node_math_random(self):
         total_numbers = 20
         observations = 5
-        numbers = self._generate_node_randoms(total_numbers)
+        values, _ = self._generate_node_randoms(total_numbers)
 
-        observed = numbers[:observations]
-        expected = numbers[observations:]
+        observed = values[:observations]
+        expected = values[observations:]
 
         predicted = predict_sequence(observed, len(expected), browser='chrome')
+
+        self.assertEqual(len(predicted), len(expected))
+        for index, (pred, exp) in enumerate(zip(predicted, expected)):
+            self.assertEqual(
+                pred,
+                exp,
+                msg=f'mismatch at predicted index {index}',
+            )
+
+    def test_predict_sequence_with_rounded_constraint(self):
+        total_numbers = 40
+        observations = 12
+        scale = 10000
+        values, modified = self._generate_node_randoms(
+            total_numbers,
+            expression=f'Math.round(value * {scale})'
+        )
+
+        observed = modified[:observations]
+        expected = values[observations:]
+
+        predicted = predict_sequence(
+            observed,
+            len(expected),
+            browser='chrome',
+            constraint_fn=constraint_rounded(scale),
+        )
 
         self.assertEqual(len(predicted), len(expected))
         for index, (pred, exp) in enumerate(zip(predicted, expected)):

@@ -1,6 +1,7 @@
 import struct
-import math
 from z3 import *
+
+from extensions import constraint_exact_double
 
 MASK = 0xFFFFFFFFFFFFFFFF
 
@@ -53,57 +54,7 @@ def to_double(browser, out):
     return double
 
 # ---------------------------
-# NEW: pluggable observation models
-# ---------------------------
-
-def constraint_exact_double(calc, obs, browser):
-    """
-    obs: a double in [0,1), e.g. Math.random() output.
-    Returns a BoolRef constraining the mantissa bits that produced obs.
-    """
-    if browser == 'chrome':
-        # Extract 52 mantissa bits from the observed double (x+1 trick)
-        known = struct.unpack('<Q', struct.pack('d', obs + 1.0))[0] & ((1 << 52) - 1)
-        M = LShR(calc, 12)  # top 52 bits
-        return M == BitVecVal(known, 64)
-    elif browser in ('firefox', 'safari'):
-        # Both effectively use 53 mantissa bits in [0, 2^53)
-        known = int(obs * (1 << 53))
-        mask = (1 << 53) - 1
-        M = calc & BitVecVal(mask, 64)
-        return M == BitVecVal(known, 64)
-    else:
-        raise ValueError('Unsupported browser: %s' % browser)
-
-def constraint_rounded(R):
-    """
-    Factory returning a constraint_fn suitable for y = Math.round(Math.random() * R).
-    obs: an integer y in [0, R].
-    Constrains M (mantissa bits) to lie in the interval implied by rounding.
-    """
-    def _fn(calc, y, browser):
-        if not (isinstance(y, int) and 0 <= y <= R):
-            raise ValueError(f'Observation {y!r} must be int in [0, {R}]')
-        k = 52 if browser == 'chrome' else 53
-        scale = 1 << k
-        # Interval for u given y = round(u*R)
-        lo = max(0, math.ceil((y - 0.5) * scale / R))
-        hi = min(scale - 1, math.floor((y + 0.5) * scale / R) - 1)
-        if hi < lo:
-            # Impossible observation under this model
-            return False  # Z3 treats False as unsat constraint
-        if browser == 'chrome':
-            M = LShR(calc, 12)
-        elif browser in ('firefox', 'safari'):
-            M = calc & BitVecVal((1 << k) - 1, 64)
-        else:
-            raise ValueError('Unsupported browser: %s' % browser)
-        # Unsigned range constraint: lo <= M <= hi
-        return And(ULE(BitVecVal(lo, 64), M), ULE(M, BitVecVal(hi, 64)))
-    return _fn
-
-# ---------------------------
-# Symbolic step (now using your constraint_fn)
+# Symbolic step
 # ---------------------------
 def sym_xs128p(slvr, sym_state0, sym_state1, obs, browser, constraint_fn, use_assumptions=True):
     """
