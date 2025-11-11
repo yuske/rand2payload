@@ -34,7 +34,7 @@ console.log(JSON.stringify({{values, modified}}));
         return data['values'], data['modified']
 
     def test_predict_sequence_matches_node_math_random(self):
-        total_numbers = 20
+        total_numbers = 64
         observations = 5
         values, _ = self._generate_node_randoms(total_numbers)
 
@@ -51,8 +51,32 @@ console.log(JSON.stringify({{values, modified}}));
                 msg=f'mismatch at predicted index {index}',
             )
 
+    def test_predict_sequence_matches_node_math_random_that_skip_first_nums(self):
+        # total_numbers = 68
+        # observations = 20
+        # skip = 45
+
+        total_numbers = 64
+        observations = 20
+        skip = 10
+        values, _ = self._generate_node_randoms(total_numbers)
+
+        observed = values[skip:observations+skip]
+        expected = values[observations+skip:]
+
+        predicted = predict_sequence(observed, len(expected), browser='chrome')
+
+        self.assertEqual(len(predicted), len(expected))
+        for index, (pred, exp) in enumerate(zip(predicted, expected)):
+            self.assertEqual(
+                pred,
+                exp,
+                msg=f'mismatch at predicted index {index}',
+            )
+
+
     def test_predict_sequence_with_rounded_constraint(self):
-        total_numbers = 40
+        total_numbers = 64
         observations = 12
         scale = 10000
         values, modified = self._generate_node_randoms(
@@ -76,6 +100,31 @@ console.log(JSON.stringify({{values, modified}}));
                 pred,
                 exp,
                 msg=f'mismatch at predicted index {index}',
+            )
+
+
+    def test_predict_sequence_backward_recovers_prior_values(self):
+        total_numbers = 65
+        observations = 5
+        start_index = 59
+        values, _ = self._generate_node_randoms(total_numbers)
+
+        observed = values[start_index:start_index + observations]
+        expected = list(reversed(values[:start_index]))
+
+        predicted = predict_sequence(
+            observed,
+            start_index, # 59 elements to go back
+            browser='chrome',
+            direction='backward',
+        )
+
+        self.assertEqual(len(predicted), len(expected))
+        for index, (pred, exp) in enumerate(zip(predicted, expected)):
+            self.assertEqual(
+                pred,
+                exp,
+                msg=f'mismatch at backward predicted index {index}',
             )
 
 

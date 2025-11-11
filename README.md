@@ -37,6 +37,18 @@ Example:
 Use `--json` to print the predictions as a JSON array instead of one value per line.
 Run the command from an environment where `z3-solver` is installed (activate the virtualenv created above).
 
+The underlying `predict_sequence` helper now accepts a `direction` argument:
+
+```python
+from xs128p import predict_sequence
+
+# Future values (default behaviour)
+predict_sequence(observations, 10, browser='chrome', direction='forward')
+
+# Recover numbers that appeared *before* the observations (most recent first)
+predict_sequence(observations, 5, browser='chrome', direction='backward')
+```
+
 ## Static web server
 
 `./web_server.py` serves files from the `public/` directory (default) with permissive CORS headers and optional verbose logging of request headers and bodies.

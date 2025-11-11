@@ -88,7 +88,14 @@ def sym_xs128p(slvr, sym_state0, sym_state1, obs, browser, constraint_fn, use_as
 # ---------------------------
 # Predict sequence with pluggable constraints
 # ---------------------------
-def predict_sequence(observations, count, browser='chrome', constraint_fn=constraint_exact_double, use_assumptions=True):
+def predict_sequence(
+    observations,
+    count,
+    browser='chrome',
+    constraint_fn=constraint_exact_double,
+    use_assumptions=True,
+    direction='forward',
+):
     """
     observations: iterable of raw observations (e.g. doubles from Math.random(), or ints from round(...)).
     count: how many future values to predict.
@@ -97,11 +104,16 @@ def predict_sequence(observations, count, browser='chrome', constraint_fn=constr
       - calc: BitVecExpr (64-bit) for this step's RNG word entering double-making
       - obs:  the raw observation from 'observations'
       - browser: same browser string (if your model needs it)
+    direction: 'forward' predicts numbers that come after the observed window.
+               'backward' predicts numbers that were produced before the observed window
+               (closest past value first).
     """
     if browser not in ('chrome', 'firefox', 'safari'):
         raise ValueError('Unsupported browser: %s' % browser)
     if count <= 0:
         return []
+    if direction not in ('forward', 'backward'):
+        raise ValueError("direction must be 'forward' or 'backward'")
     observations = list(observations)
     if not observations:
         raise ValueError('observations must contain at least one value')
@@ -142,20 +154,32 @@ def predict_sequence(observations, count, browser='chrome', constraint_fn=constr
         if slvr.check() == sat:
             raise ValueError('Multiple solutions found; provide more observations')
 
-    # Predict 'count' future doubles
-    predictions = []
     current_state0 = state0
     current_state1 = state1
+    predictions = []
 
-    # First output from recovered state:
-    predictions.append(to_double(browser, current_state0))
+    if direction == 'forward':
+        predictions.append(to_double(browser, current_state0))
+        for _ in range(count - 1):
+            if browser == 'chrome':
+                current_state0, current_state1, _ = xs128p_backward(current_state0, current_state1, browser)
+                predictions.append(to_double(browser, current_state0))
+            else:
+                current_state0, current_state1, out = xs128p(current_state0, current_state1, browser)
+                predictions.append(to_double(browser, out))
+        return predictions
 
-    for _ in range(count - 1):
+    # direction == 'backward'
+    obs_len = len(observations)
+    # Step forward through the observed window to align with the earliest observation.
+    for _ in range(obs_len):
+        current_state0, current_state1, _ = xs128p(current_state0, current_state1, browser)
+
+    for _ in range(count):
+        current_state0, current_state1, out = xs128p(current_state0, current_state1, browser)
         if browser == 'chrome':
-            current_state0, current_state1, out = xs128p_backward(current_state0, current_state1, browser)
-            out = current_state0 & MASK
+            predictions.append(to_double(browser, current_state0))
         else:
-            current_state0, current_state1, out = xs128p(current_state0, current_state1, browser)
-        predictions.append(to_double(browser, out))
+            predictions.append(to_double(browser, out))
 
     return predictions

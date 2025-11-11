@@ -138,6 +138,7 @@ class StaticRequestHandler(SimpleHTTPRequestHandler):
                 observations,
                 count,
                 browser='chrome',
+                # direction='backward',
                 constraint_fn=constraint_rounded(effective_scale),
             )
         else:
