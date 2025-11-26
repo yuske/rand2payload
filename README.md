@@ -16,13 +16,10 @@ pip install z3-solver
 
 ## Tests
 
+- Monitor (`monitor.js`): `node --test tests/test_monitor.js`
+- Chrome/Node regression: `python3 -m unittest tests/test_chrome_node.py`
+
 The Chrome/Node regression test spawns Node.js to capture a `Math.random()` sequence, feeds the first five values into `predict_sequence`, and checks the predicted values against the subsequent numbers from Node.
-
-Run the test with:
-
-```
-python3 -m unittest tests/test_chrome_node.py
-```
 
 ## CLI usage
 
@@ -48,6 +45,19 @@ predict_sequence(observations, 10, browser='chrome', direction='forward')
 # Recover numbers that appeared *before* the observations (most recent first)
 predict_sequence(observations, 5, browser='chrome', direction='backward')
 ```
+
+## Math.random monitor
+
+`monitor.js` instruments Node's `Math.random()` to log every call with a stack trace. It installs itself when required, so you can run your program with the monitor preloaded:
+
+```
+node -r ./monitor.js app.js
+```
+
+Configuration via environment variables:
+
+- `MATH_RANDOM_LOG`: output file path (default: `./math-random-traces.log`)
+- `MATH_RANDOM_VERBOSE`: set to `0` to silence console logging (file logging is always on)
 
 ## Static web server
 
