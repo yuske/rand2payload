@@ -58,6 +58,7 @@ Configuration via environment variables:
 
 - `MATH_RANDOM_LOG`: output file path (default: `./math-random-traces.log`)
 - `MATH_RANDOM_VERBOSE`: set to `0` to silence console logging (file logging is always on)
+- `MATH_RANDOM_FILTER`: semicolon-separated substrings; if a stack trace contains any of them, that call is counted but not logged. Supports escapes like `\\n`, `\\t`, and `\\\\`.
 
 ## Static web server
 

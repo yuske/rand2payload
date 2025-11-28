@@ -3,12 +3,10 @@
 // Usage (instrument your whole app):
 //   node -r ./monitor.js app.js
 //
-// Quick self-test (runs some sample calls if you run this file directly):
-//   node monitor.js
-//
 // Env vars:
 //   MATH_RANDOM_LOG=/path/to/file.log   (default: ./math-random-traces.log)
 //   MATH_RANDOM_VERBOSE=0               (silence console logging)
+//   MATH_RANDOM_FILTER=foo;bar          (semicolon-separated filters; supports \n, \t, \\ escapes)
 
 "use strict";
 
@@ -19,6 +17,26 @@ const LOG_FILE =
   process.env.MATH_RANDOM_LOG ||
   path.join(process.cwd(), "math-random-traces.log");
 const LOG_TO_CONSOLE = process.env.MATH_RANDOM_VERBOSE !== "0";
+const FILTER_PATTERNS = parseFilters(process.env.MATH_RANDOM_FILTER);
+
+function parseFilters(raw) {
+  if (!raw) return [];
+  return raw
+    .split(";")
+    .map((value) => decodeEscapes(value))
+    .filter(Boolean);
+}
+
+function decodeEscapes(value) {
+  try {
+    // JSON.parse handles common JS string escapes (\n, \t, \uXXXX, etc.)
+    return JSON.parse(
+      `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+    );
+  } catch {
+    return value;
+  }
+}
 
 function installMonitor() {
   // Guard: don’t install twice
@@ -42,21 +60,24 @@ function installMonitor() {
       .filter(Boolean)
       .slice(1) // remove "Error: …" header line
       .join("\n");
+    const isFiltered = FILTER_PATTERNS.some((pattern) => stack.includes(pattern));
 
     const entry =
       `[${now}] Math.random() #${monitoredRandom.__count}\n` + stack + "\n\n";
 
-    try {
-      fs.appendFileSync(LOG_FILE, entry);
-    } catch (e) {
-      // Fallback to console if file write fails
-      console.warn("Failed to write Math.random log file:", e.message);
-      console.warn(entry);
-    }
+    if (!isFiltered) {
+      try {
+        fs.appendFileSync(LOG_FILE, entry);
+      } catch (e) {
+        // Fallback to console if file write fails
+        console.warn("Failed to write Math.random log file:", e.message);
+        console.warn(entry);
+      }
 
-    if (LOG_TO_CONSOLE) {
-      // Console echo for immediate visibility
-      console.warn(entry);
+      if (LOG_TO_CONSOLE) {
+        // Console echo for immediate visibility
+        console.warn(entry);
+      }
     }
 
     // Call through to the original
